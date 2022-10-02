@@ -1,0 +1,210 @@
+---
+title: "Most Dangerous and Costly Weather from 1950 to 2011"
+author: "Clint Woody"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(lattice)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Analysis Synopsis 
+
+For this project I analyzed the U.S. national Oceanic and Atmospheric Administration's (NOAA) storm database that included data from 1950 to 2011.  The questions I am attempting to answer through data analysis are: which type of weather related events are most harmful to population health and which weather related events have the greatest economic consequences. The initial database contained almost 1 million observations, so I began by reducing the data to observations that directly impacted health and the economy.  Removing events that did not result in injury, loss of life, property damage, or crop damage reduced the database to around 250k observations.  From there I only wanted to look at the most impactful events so I limited the data to the top 10% of fatalities, injuries, and total combined crop and property damage. This resulted in about 1400 weather event observations. The final phase of my analysis was to find the event that had the highest fatalities, injuries, and damage per year.
+
+
+## Data Processing
+
+1. The first step was loading and reading the data to include the .pdf from NOAA that describes the variables.
+
+```{r loading data,message=FALSE}
+if(!file.exists("./data")){dir.create("./data")}
+url1<-"https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+url2<-"https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf"
+download.file(url1,"./data/StormData.csv.bz2",method="curl")
+##download.file(url2,"./data/StormDataVar.pdf",method="curl")
+storm_data<-read_csv("./data/StormData.csv.bz2")
+```
+
+2. Second, as mentioned above I removed any columns related to location and any observations that didn't have fatalities, injuries, or cost of damages.
+
+```{r reduce data set,message=FALSE}
+storm_data<-storm_data%>%select(c(2,7:8,23:28))%>%filter(PROPDMG>0|CROPDMG>0|
+            FATALITIES>0|INJURIES>0)
+```
+
+3. Next I transformed the columns into usable classes, like Date class for the date and numeric for the cost.  I also had to convert all the Damage estimates the same denomination.
+
+```{r correct data,message=FALSE}
+storm_data$BGN_DATE<-mdy_hms(storm_data$BGN_DATE)
+storm_data$PROPDMG<- paste(storm_data$PROPDMG,storm_data$PROPDMGEXP,sep="")
+storm_data$PROPDMG<- suppressWarnings(as.numeric(gsub("[Kk]","e3",
+                                gsub("[Mm]","e6",
+                                gsub("[Bb]","e9",
+                                storm_data$PROPDMG)))))    
+
+storm_data$CROPDMG<- paste(storm_data$CROPDMG,storm_data$CROPDMGEXP,sep="")
+storm_data$CROPDMG<- suppressWarnings(as.numeric(gsub("[Kk]","e3",
+                                gsub("[Mm]","e6",
+                                gsub("[Bb]","e9",
+                                storm_data$CROPDMG)))))
+
+```
+
+4. From there I removed the two variables used to denote denomination in the damage variables.  I also replaced the NA values with 0 in the two property and crop damage expense columns. 
+
+``` {r remove,message=F}
+storm_data<-subset(storm_data,select=(-c(PROPDMGEXP,CROPDMGEXP)))
+
+storm_data$PROPDMG<-replace(storm_data$PROPDMG,is.na(storm_data$PROPDMG),0)
+storm_data$CROPDMG<-replace(storm_data$CROPDMG,is.na(storm_data$CROPDMG),0)
+
+```
+
+5. Once I had a data set I could conduct calculations with I combined the two damage variables into one total damage variable labeled total_DMG.  I added a column for just year year and I cleaned up the names of two other columns.  I then grouped the data by year then event type.  This allowed me to calculate the total fatalities, injuries, and cost by event per year.
+
+```{r order data,message=FALSE}
+storm_data2<-storm_data%>%mutate(total_DMG=PROPDMG+CROPDMG,year=year(BGN_DATE))%>%
+        rename("event_type"="EVTYPE","date"= "BGN_DATE")%>%
+        group_by(year,event_type)%>%
+        summarise(tot_fat_year=sum(FATALITIES),tot_inj_year=sum(INJURIES),
+                  total_cost_year=(sum(total_DMG)/1000000000))
+```
+
+6. Next I made two separate tables, one focused on the health aspect and the other on economic cost.  I further reduce the amount of data by only taking the top 10% of all observations in fatalities, injuries, and total cost.  This captures 78% of all fatalities, 91% of all injuries, and 93% of all cost.
+
+```{r filter,message=FALSE}
+top1DMG<-quantile(storm_data2$total_cost_year,prob=.90)
+top1FAT<-quantile(storm_data2$tot_fat_year,prob=.90)
+top1INJ<-quantile(storm_data2$tot_inj_year,prob=.90)
+
+storm_data_health<-storm_data2%>%filter(tot_fat_year>top1FAT|tot_inj_year>top1INJ)
+storm_data_cost<-storm_data2%>%filter(total_cost_year>top1DMG)
+```
+
+7. The last cleaning of data that I did was combined like type events into a single event to further condense the focus of the data. Below is an example how I did this bye changing the event name.
+
+```{r combine like events,message=FALSE}
+storm_data_health$event_type<-
+gsub("HEAVY SNOW|ICE STORM|BLIZZARD|EXTREME COLD|COLD/WIND CHILL|GLAZE",
+     "WINTER STORM",
+gsub("HIGH WIND|THUNDERSTORM WINDS|LIGHTNING|TSTM WIND|THUNDERSTORM WIND|HAIL",
+                                     "THUNDERSTORM", 
+gsub("TROPICAL STORM|HURRICANE/TYPHOON|HURRICANE","HURRICANE/TS",
+gsub("EXTREME HEAT|EXCESSIVE HEAT|HEAT WAVE", "HEAT",
+gsub("FLASH FLOOD|FLOOD", "FLOODING",
+gsub("RIP CURRENTS","RIP CURRENT",storm_data_health$event_type))))))
+```
+
+
+```{r combine hiden,echo=FALSE}
+storm_data_cost$event_type<-gsub("HURRICANE","HURRICANE/TS",
+                                 storm_data_cost$event_type)
+storm_data_cost$event_type<-
+gsub("HEAVY SNOW|ICE STORM|BLIZZARD|EXTREME COLD|COLD/WIND CHILL|GLAZE",
+     "WINTER STORM",
+gsub("TROPICAL STORM|HURRICANE/TS/TYPHOON|HURRICANE OPAL|HURRICANE/TS OPAL",
+     "HURRICANE/TS",
+gsub("EXTREME HEAT|EXCESSIVE HEAT|HEAT WAVE", 
+     "HEAT",
+gsub("FLASH FLOOD|FLOOD|RIVER FLOOD|STORM SURGE|STORM SURGE/TIDE",
+     "FLOODING",
+gsub("RIP CURRENTS","RIP CURRENT",storm_data_cost$event_type)))))
+
+storm_data_cost$event_type<-gsub("TYPHOON","HURRICANE/TS",
+                                 storm_data_cost$event_type)
+storm_data_cost$event_type<-gsub("TORNADOES, TSTM WIND, HAIL","TORNADO",
+                                 storm_data_cost$event_type)
+                                 
+storm_data_cost$event_type<-
+        gsub("HIGH WIND|THUNDERSTORM WINDS|LIGHTNING|TSTM WIND|THUNDERSTORM WIND|HAIL",
+     "THUNDERSTORM",storm_data_cost$event_type)
+storm_data_cost$event_type<-
+        gsub("SEVERE THUNDERSTORM|THUNDERSTORMS",
+             "THUNDERSTORM",storm_data_cost$event_type)
+storm_data_cost$event_type<-
+        gsub("/SEVERE WEATHER$","",storm_data_cost$event_type)
+storm_data_cost$event_type<-
+        gsub("/FOREST ","",storm_data_cost$event_type)
+storm_data_cost$event_type<-
+        gsub("WILDFIRE","WILD FIRES",storm_data_cost$event_type)
+```
+
+## Results
+
+For the results I first looked at the lattice plots per event to see if anything stood out.  To do this I needed to compute the total fatalities, injuries, and cost per event per year. Then I refined the data further into average per year per event and total per event.
+
+# Health
+
+Looking at health impacts with fatalities then injuries you can see below Tornado and Heat related events begin to stand out.
+
+```{r results tables,message=FALSE}
+total_fat_by_event<-storm_data_health%>%group_by(event_type)%>%
+        summarise(total=sum(tot_fat_year))%>%arrange(desc(total))
+average_fat_year<-storm_data_health%>%group_by(event_type)%>%
+        summarise(average=mean(tot_fat_year))%>%arrange(desc(average))
+total_inj_by_event<-storm_data_health%>%group_by(event_type)%>%
+        summarise(total=sum(tot_inj_year))%>%arrange(desc(total))
+average_inj_year<-storm_data_health%>%group_by(event_type)%>%
+        summarise(average=mean(tot_inj_year))%>%arrange(desc(average))
+```
+
+```{r health, message=FALSE}
+xyplot(tot_fat_year~year|event_type,data=storm_data_health,
+       xlab = "Year 1950-2011",ylab = "Number of fatalites", 
+       main = "Fatalities per Year for each Event Type")
+```
+
+
+``` {r health injuries}
+xyplot(tot_inj_year~year|event_type,data=storm_data_health,
+       xlab = "Year 1950-2011",ylab = "Number of injuries", 
+       main = "Injuries per Year for each Event Type")
+```
+
+
+```{r health table,message=FALSE}
+results_health<-merge(merge(total_fat_by_event,total_inj_by_event,1),
+                      merge(average_fat_year,average_inj_year,1),1)
+colnames(results_health)<-c("event","total_fatalities", "total_injuries",
+                           "average_fatalities_year","average_injuries_year")
+results_health<-arrange(results_health,desc(average_fatalities_year),desc(total_fat_by_event))
+library(knitr)
+kable(results_health, caption="Fatalities and Injuries due to Weather")
+```
+
+From the table when arranged in descending order by average fatalities a year it appears that **`r results_health[1,1]`** is the most harmful to the population.  However, `r results_health[which.max(results_health$total_fatalities),1]` has the highest total fatalities with `r max(results_health$total_fatalities)`.
+
+
+# Cost
+
+Looking at economic impacts with the cost of damages to property and crops combined you can see below Hurricanes and Flooding related events begin to stand out.
+
+```{r cost chart,message=FALSE}
+total_cost_by_event<-storm_data_cost%>%group_by(event_type)%>%
+        summarise(total=sum(total_cost_year))%>%arrange(desc(total))
+average_cost_year<-storm_data_cost%>%group_by(event_type)%>%
+        summarise(average=mean(total_cost_year))%>%arrange(desc(average))
+
+xyplot(total_cost_year~year|event_type,data=storm_data_cost,
+       xlab = "Year 1950-2011",ylab = "Cost of Damage in Billions of $", 
+       main = "Billions in Damages per Year for each Event Type")
+```
+
+
+```{r cost table,message=FALSE}
+results_cost<-merge(total_cost_by_event,average_cost_year,1)
+colnames(results_cost)<-c("event","total_cost", "average_cost_year")
+results_cost<-arrange(results_cost,desc(average_cost_year))
+library(knitr)
+kable(results_cost, caption="Cost due to Damages in Billions of $")
+```
+
+From the table when arranged in descending order by average cost of damages per year in the billions it appears that **`r results_cost[1,1]`** has the greatest economic consequences.  However, `r results_cost[which.max(results_cost$total_cost),1]` have the highest total cost of damages through the measured history with `r max(results_cost$total_cost)` Billion Dollars.
+
+
